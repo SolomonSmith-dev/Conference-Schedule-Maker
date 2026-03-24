@@ -729,7 +729,7 @@ with tab_motm:
                             cols.append('Availability Constraint')
                         cols += ['Section', 'Date', 'Session ID', 'Time Slot', 'Overflow']
 
-                        final_df = df_work[df_work['Section'].notna()][cols]
+                        final_df = df_work[df_work['Section'].notna()][cols].sort_values(by=['Section', 'Session ID']).reset_index(drop=True)
 
                         overflow_count = (final_df['Overflow'] == 'OVERFLOW').sum()
                         st.write("**Oral Schedule Preview (first 20 rows):**")
@@ -798,7 +798,7 @@ with tab_motm:
                             cols.append('Availability Constraint')
                         cols += ['Section', 'Date', 'Session ID', 'Time Slot']
 
-                        final_df = df_work[df_work['Section'].notna()][cols]
+                        final_df = df_work[df_work['Section'].notna()][cols].sort_values(by=['Section', 'Session ID']).reset_index(drop=True)
 
                         st.write("**Poster Schedule Preview (first 20 rows):**")
                         st.dataframe(final_df.head(20))
