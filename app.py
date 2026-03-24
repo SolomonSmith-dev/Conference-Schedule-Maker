@@ -38,7 +38,8 @@ THIN_BORDER  = Border(
 COL_WIDTHS   = {"Section": 14, "Date": 12, "Session ID": 11,
                 "Time Slot": 11, "Theme": 20, "Title": 40,
                 "Presenter(s)": 28, "Faculty Mentor": 24,
-                "Availability Constraint": 28}
+                "Availability Constraint": 28,
+                "Overflow": 12}
 
 def style_sheet(ws, columns):
     for col_idx, col_name in enumerate(columns, start=1):
@@ -182,14 +183,26 @@ def assign_with_constraints(df_work, sections, has_constraints, mode,
 
     schedulable = df_work[~excluded_mask & ~no_match_mask].copy()
 
+    if schedulable.empty:
+        df_work["Session ID"] = None
+        df_work["Date"] = None
+        df_work["Time Slot"] = None
+        df_work["Section"] = None
+        df_work["Overflow"] = ""
+        df_work.drop(columns=["_parsed", "_allowed", "_ctype"], inplace=True, errors="ignore")
+        if not excluded_df.empty:
+            excluded_df = excluded_df.drop(columns=["_parsed", "_allowed", "_ctype", "Session ID", "Date", "Time Slot", "Section"], errors="ignore")
+        return df_work, excluded_df, warnings, 1
+
     all_idx = set(range(num_sections))
     constrained_mask = schedulable["_allowed"].apply(lambda a: set(a) != all_idx)
     constrained = schedulable[constrained_mask].copy()
     unconstrained = schedulable[~constrained_mask].copy()
 
     # Phase 1: place constrained (most restricted first)
-    constrained["_strictness"] = constrained["_allowed"].apply(len)
-    constrained = constrained.sort_values(by=["_strictness", "Theme"])
+    if not constrained.empty:
+        constrained["_strictness"] = constrained["_allowed"].apply(len)
+        constrained = constrained.sort_values(by=["_strictness", "Theme"])
 
     section_buckets = [[] for _ in range(num_sections)]
     for orig_idx, row in constrained.iterrows():
@@ -226,6 +239,7 @@ def assign_with_constraints(df_work, sections, has_constraints, mode,
     df_work["Date"] = None
     df_work["Time Slot"] = None
     df_work["Section"] = None
+    df_work["Overflow"] = ""
 
     session_id = 1
     for si, bucket in enumerate(section_buckets):
@@ -242,16 +256,19 @@ def assign_with_constraints(df_work, sections, has_constraints, mode,
                 for i in range(0, len(theme_df), int(max_presentations)):
                     group = theme_df.iloc[i:i + int(max_presentations)]
                     required_end = time_cursor + timedelta(minutes=int(slot_duration))
-                    if required_end > section_end:
+                    is_overflow = required_end > section_end
+                    if is_overflow:
                         warnings.append(f"{sec['name']} ({sec['date']}) ran out of time during theme '{theme}'.")
                     for idx in group.index:
                         df_work.at[idx, "Session ID"] = session_id
                         df_work.at[idx, "Date"] = sec["date"].strftime("%Y-%m-%d")
                         df_work.at[idx, "Time Slot"] = time_cursor.strftime("%I:%M %p")
                         df_work.at[idx, "Section"] = sec["name"]
+                        if is_overflow:
+                            df_work.at[idx, "Overflow"] = "OVERFLOW"
                     time_cursor += timedelta(minutes=int(slot_duration))
                     session_id += 1
-        else:  # poster — all posters display simultaneously, just assign day
+        else:  # poster -- all posters display simultaneously, just assign day
             time_label = f"{sec['start_dt'].strftime('%I:%M %p')} - {sec['end_dt'].strftime('%I:%M %p')}"
             for idx in section_pres.index:
                 df_work.at[idx, "Session ID"] = session_id
@@ -284,6 +301,7 @@ def _assign_no_constraints(df_work, sections, mode, slot_duration, max_presentat
     df_work["Date"] = None
     df_work["Time Slot"] = None
     df_work["Section"] = None
+    df_work["Overflow"] = ""
 
     session_id = 1
     current_time = [s["start_dt"] for s in sections]
@@ -296,16 +314,19 @@ def _assign_no_constraints(df_work, sections, mode, slot_duration, max_presentat
                 for i in range(0, len(theme_df), int(max_presentations)):
                     group = theme_df.iloc[i:i + int(max_presentations)]
                     required_end = current_time[si] + timedelta(minutes=int(slot_duration))
-                    if required_end > section_end:
+                    is_overflow = required_end > section_end
+                    if is_overflow:
                         overflow_warnings.append(f"{sections[si]['name']} ({sections[si]['date']}) ran out of time during theme '{theme}'.")
                     for idx in group.index:
                         df_work.at[idx, "Session ID"] = session_id
                         df_work.at[idx, "Date"] = sections[si]["date"].strftime("%Y-%m-%d")
                         df_work.at[idx, "Time Slot"] = current_time[si].strftime("%I:%M %p")
                         df_work.at[idx, "Section"] = sections[si]["name"]
+                        if is_overflow:
+                            df_work.at[idx, "Overflow"] = "OVERFLOW"
                     current_time[si] += timedelta(minutes=int(slot_duration))
                     session_id += 1
-    else:  # poster — all posters display simultaneously, just assign day
+    else:  # poster -- all posters display simultaneously, just assign day
         global_session_id = 1
         for si, section_df in enumerate(section_dfs):
             time_label = f"{sections[si]['start_dt'].strftime('%I:%M %p')} - {sections[si]['end_dt'].strftime('%I:%M %p')}"
@@ -356,245 +377,445 @@ def build_xlsx(sections_data, final_df, columns, output_filename, excluded_df=No
     return buf
 
 # ----------------------------------------------------------------
-# LAYOUT
+# LAYOUT -- Tabbed interface: Original + CSUSB MOTM Edition
 # ----------------------------------------------------------------
-col1, col2 = st.columns([1, 2])
-col1.markdown('<div class="column-spacing"></div>', unsafe_allow_html=True)
-col2.markdown('<div class="column-spacing"></div>', unsafe_allow_html=True)
+tab_original, tab_motm = st.tabs(["Original", "CSUSB MOTM Edition"])
 
-with col1:
-    st.markdown("""
-    **Welcome to the Conference Schedule Maker!**
-    Please follow the instructions below to ensure smooth processing of your schedule:
+# ==================================================================
+# ORIGINAL TAB
+# ==================================================================
+with tab_original:
+    orig_col1, orig_col2 = st.columns([1, 2])
+    orig_col1.markdown('<div class="column-spacing"></div>', unsafe_allow_html=True)
+    orig_col2.markdown('<div class="column-spacing"></div>', unsafe_allow_html=True)
 
-    #### Required Columns in the Excel File:
-    Your Excel file must include **exactly** the following columns (case-sensitive):
-    - **Theme**
-    - **Title**
-    - **Presenter(s)**
-    - **Faculty Mentor**
+    with orig_col1:
+        st.markdown("""
+        **Welcome to the Conference Schedule Maker!**
+        Please follow the instructions below to ensure smooth processing of your schedule:
 
-    #### Optional Column:
-    - **Availability Constraint** — If present, the scheduler will respect
-      presenter availability. Supported formats:
-      - *Empty / blank*: No constraint (schedule anywhere)
-      - *Specific time window*: `April 15, 2:30 - 4:00 PM`
-      - *Multiple windows*: comma-separated list of windows
-      - *Day only*: `April 15 only`
-      - *Either day*: No constraint
-      - *None / Neither day*: Presenter excluded from schedule
-      - *Late submission*: Treated as no constraint
+        #### Required Columns in the Excel File:
+        Your Excel file must include **exactly** the following columns (case-sensitive):
+        - **Theme**
+        - **Title**
+        - **Presenter(s)**
+        - **Faculty Mentor**
 
-    #### Column Descriptions:
-    - **Theme**: Category or department (e.g., Arts, Biology, Computer Science)
-    - **Title**: Title of the presentation
-    - **Presenter(s)**: Name(s), comma-separated for multiple
-    - **Faculty Mentor**: Name(s) of the faculty mentor(s)
+        #### Column Descriptions:
+        - **Theme**: Category or department (e.g., Arts, Biology, Computer Science)
+        - **Title**: Title of the presentation
+        - **Presenter(s)**: Name(s), comma-separated for multiple
+        - **Faculty Mentor**: Name(s) of the faculty mentor(s)
 
-    #### Multi-Day / Multi-Sheet Output:
-    Each section is assigned a **date + time window**. The downloaded XLSX will contain
-    a **Master sheet** plus one tab per section, named `MMDD HHMM-HHMM`
-    (e.g. `415 1430-1600` = April 15, 2:30-4:00 PM).
-    """)
+        #### Multi-Day / Multi-Sheet Output:
+        Each section is assigned a **date + time window**. The downloaded XLSX will contain
+        a **Master sheet** plus one tab per section, named `MMDD HHMM-HHMM`
+        (e.g. `415 1430-1600` = April 15, 2:30-4:00 PM).
+        """)
 
-with col2:
-    uploaded_file = st.file_uploader("Upload Excel File", type=["xlsx"])
+    with orig_col2:
+        orig_file = st.file_uploader("Upload Excel File", type=["xlsx"], key="orig_upload")
 
-    if uploaded_file:
-        all_sheets = pd.read_excel(uploaded_file, sheet_name=None)
-        # Always read from Master if it exists, otherwise first sheet
-        if "Master" in all_sheets:
-            df = all_sheets["Master"]
-        else:
-            df = list(all_sheets.values())[0]
+        if orig_file:
+            orig_sheets = pd.read_excel(orig_file, sheet_name=None)
+            if "Master" in orig_sheets:
+                orig_df = orig_sheets["Master"]
+            else:
+                orig_df = list(orig_sheets.values())[0]
 
-        required_columns = ['Theme', 'Title', 'Presenter(s)', 'Faculty Mentor']
-        missing_cols = [col for col in required_columns if col not in df.columns]
+            orig_required = ['Theme', 'Title', 'Presenter(s)', 'Faculty Mentor']
+            orig_missing = [c for c in orig_required if c not in orig_df.columns]
 
-        if missing_cols:
-            st.error(f"Missing columns: {missing_cols}")
-        elif df.empty:
-            st.warning("The Master sheet is empty. Add your presentations to the Master sheet and re-upload.")
-        else:
-            has_constraints = "Availability Constraint" in df.columns
+            if orig_missing:
+                st.error(f"Missing columns: {orig_missing}")
+            elif orig_df.empty:
+                st.warning("The Master sheet is empty. Add your presentations to the Master sheet and re-upload.")
+            else:
+                orig_session_type = st.radio("Choose Session Type:", ["Oral Session Maker", "Poster Session Maker"], key="orig_session_type")
 
-            if has_constraints:
-                _year = datetime.today().year
-                _parsed = df["Availability Constraint"].apply(lambda v: parse_constraint(v, _year))
-                _n_any = sum(1 for p in _parsed if p["type"] == "any")
-                _n_excl = sum(1 for p in _parsed if p["type"] == "excluded")
-                _n_unrec = sum(1 for p in _parsed if p["type"] == "unrecognized")
-                _n_constrained = len(df) - _n_any - _n_excl - _n_unrec
-                with st.expander("Availability Constraint Summary", expanded=False):
-                    st.write(f"Total presentations: **{len(df)}**")
-                    st.write(f"Unconstrained: **{_n_any}**")
-                    st.write(f"Constrained to specific sections: **{_n_constrained}**")
-                    st.write(f"Excluded (cannot attend): **{_n_excl}**")
-                    if _n_unrec > 0:
-                        st.warning(f"{_n_unrec} presentation(s) have unrecognized constraint formats (will be treated as unconstrained).")
-                    if _n_excl > 0:
-                        _excl_df = df[_parsed.apply(lambda p: p["type"] == "excluded")]
-                        st.info("Excluded presenters:")
-                        st.dataframe(_excl_df[["Title", "Presenter(s)", "Availability Constraint"]])
+                if orig_session_type == "Oral Session Maker":
+                    orig_slot = st.number_input("Duration per presentation (minutes):", min_value=5, max_value=20, value=15, key="orig_slot")
+                    orig_max = st.number_input("Max presentations per session:", min_value=3, max_value=10, value=4, key="orig_max")
+                    orig_num = st.number_input("Number of sections (across all days):", min_value=1, max_value=10, value=2, key="orig_num")
 
-            session_type = st.radio("Choose Session Type:", ["Oral Session Maker", "Poster Session Maker"])
+                    orig_sections = []
+                    for i in range(int(orig_num)):
+                        st.subheader(f"Section {i+1}")
+                        c_date, c_start, c_end = st.columns(3)
+                        with c_date:
+                            section_date = st.date_input("Date:", key=f"orig_date_{i}", value=datetime.today().date())
+                        with c_start:
+                            start = st.time_input("Start time:", key=f"orig_start_{i}",
+                                                  value=datetime.strptime("10:00 AM", "%I:%M %p").time() if i == 0
+                                                  else datetime.strptime("2:00 PM", "%I:%M %p").time())
+                        with c_end:
+                            end = st.time_input("End time:", key=f"orig_end_{i}",
+                                                value=datetime.strptime("11:00 AM", "%I:%M %p").time() if i == 0
+                                                else datetime.strptime("3:00 PM", "%I:%M %p").time())
 
-            # ----------------------------------------------------------------
-            # ORAL SESSION MAKER
-            # ----------------------------------------------------------------
-            if session_type == "Oral Session Maker":
-                slot_duration     = st.number_input("Duration per presentation (minutes):", min_value=5, max_value=20, value=15)
-                max_presentations = st.number_input("Max presentations per session:",       min_value=3, max_value=10, value=4)
-                num_sections      = st.number_input("Number of sections (across all days):", min_value=1, max_value=10, value=2)
+                        start_dt = datetime.combine(section_date, start)
+                        end_dt = datetime.combine(section_date, end)
+                        if end_dt <= start_dt:
+                            end_dt += timedelta(days=1)
 
-                sections = []
-                for i in range(int(num_sections)):
-                    st.subheader(f"Section {i+1}")
-                    c_date, c_start, c_end = st.columns(3)
-                    with c_date:
-                        section_date = st.date_input("Date:", key=f"date_{i}", value=datetime.today().date())
-                    with c_start:
-                        start = st.time_input("Start time:", key=f"start_{i}",
-                                              value=datetime.strptime("10:00 AM", "%I:%M %p").time() if i == 0
-                                              else datetime.strptime("2:00 PM",   "%I:%M %p").time())
-                    with c_end:
-                        end = st.time_input("End time:", key=f"end_{i}",
-                                            value=datetime.strptime("11:00 AM", "%I:%M %p").time() if i == 0
-                                            else datetime.strptime("3:00 PM",   "%I:%M %p").time())
-
-                    start_dt = datetime.combine(section_date, start)
-                    end_dt   = datetime.combine(section_date, end)
-                    if end_dt <= start_dt:
-                        end_dt += timedelta(days=1)
-
-                    sections.append({
-                        'name':       f"Section {i+1}",
-                        'sheet_name': make_sheet_name(section_date, start, end),
-                        'date':       section_date,
-                        'start':      start,
-                        'end':        end,
-                        'start_dt':   start_dt,
-                        'end_dt':     end_dt,
-                    })
-
-                if st.button("Generate Schedule"):
-                    df_work = df.copy().sort_values(by="Theme").reset_index(drop=True)
-
-                    df_work, excluded_df, gen_warnings, session_id = assign_with_constraints(
-                        df_work, sections, has_constraints, mode="oral",
-                        slot_duration=slot_duration, max_presentations=max_presentations,
-                    )
-
-                    for w in gen_warnings:
-                        st.warning(w)
-
-                    cols = ['Theme', 'Title', 'Presenter(s)', 'Faculty Mentor']
-                    if has_constraints:
-                        cols.append('Availability Constraint')
-                    cols += ['Section', 'Date', 'Session ID', 'Time Slot']
-
-                    # Only include scheduled rows in the final output
-                    final_df = df_work[df_work['Section'].notna()][cols]
-
-                    st.write("**Oral Schedule Preview (first 20 rows):**")
-                    st.dataframe(final_df.head(20))
-                    if len(final_df) > 20:
-                        st.caption(f"Showing 20 of {len(final_df)} rows.")
-                    st.write(f"Total scheduled: {final_df['Session ID'].notna().sum()} presentations | Sessions: {session_id-1}")
-                    if not excluded_df.empty:
-                        st.info(f"{len(excluded_df)} presenter(s) excluded due to availability constraints (see Excluded sheet in download).")
-
-                    sections_data = []
-                    for si, s in enumerate(sections):
-                        mask = final_df['Section'] == s['name']
-                        sections_data.append({
-                            "sheet_name": s['sheet_name'],
-                            "section_df": final_df[mask].reset_index(drop=True),
+                        orig_sections.append({
+                            'name': f"Section {i+1}", 'sheet_name': make_sheet_name(section_date, start, end),
+                            'date': section_date, 'start': start, 'end': end,
+                            'start_dt': start_dt, 'end_dt': end_dt,
                         })
 
-                    xlsx_buf = build_xlsx(sections_data, final_df, cols, "oral_schedule.xlsx",
-                                          excluded_df=excluded_df if not excluded_df.empty else None)
-                    st.download_button(
-                        "Download Oral Schedule XLSX",
-                        xlsx_buf,
-                        "oral_presentation_schedule.xlsx",
-                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    )
+                    if st.button("Generate Schedule", key="orig_gen_oral"):
+                        df_work = orig_df.copy().sort_values(by="Theme").reset_index(drop=True)
+                        split_indices = np.linspace(0, len(df_work), int(orig_num)+1, dtype=int)
+                        section_dfs = [df_work.iloc[split_indices[i]:split_indices[i+1]] for i in range(int(orig_num))]
 
-            # ----------------------------------------------------------------
-            # POSTER SESSION MAKER
-            # ----------------------------------------------------------------
-            elif session_type == "Poster Session Maker":
-                num_sections  = st.number_input("Number of poster sections (across all days):", min_value=1, max_value=10, value=2)
+                        df_work['Session ID'] = None
+                        df_work['Date'] = None
+                        df_work['Time Slot'] = None
+                        df_work['Section'] = None
 
-                poster_sections = []
-                for i in range(int(num_sections)):
-                    st.subheader(f"Poster Section {i+1}")
-                    c_date, c_start, c_end = st.columns(3)
-                    with c_date:
-                        section_date = st.date_input("Date:", key=f"poster_date_{i}", value=datetime.today().date())
-                    with c_start:
-                        start = st.time_input("Start Time:", key=f"poster_start_{i}",
-                                              value=datetime.strptime("10:00 AM", "%I:%M %p").time() if i == 0
-                                              else datetime.strptime("1:00 PM",   "%I:%M %p").time())
-                    with c_end:
-                        end = st.time_input("End Time:", key=f"poster_end_{i}",
-                                            value=datetime.strptime("11:30 AM", "%I:%M %p").time() if i == 0
-                                            else datetime.strptime("2:30 PM",   "%I:%M %p").time())
+                        session_id = 1
+                        current_time = [s['start_dt'] for s in orig_sections]
+                        overflow_warnings = []
 
-                    start_dt = datetime.combine(section_date, start)
-                    end_dt   = datetime.combine(section_date, end)
-                    if end_dt <= start_dt:
-                        end_dt += timedelta(days=1)
+                        for si, section_df in enumerate(section_dfs):
+                            section_end = orig_sections[si]['end_dt']
+                            for theme, theme_df in section_df.groupby('Theme'):
+                                for i in range(0, len(theme_df), int(orig_max)):
+                                    group = theme_df.iloc[i:i+int(orig_max)]
+                                    required_end = current_time[si] + timedelta(minutes=len(group)*int(orig_slot))
+                                    if required_end > section_end:
+                                        overflow_warnings.append(
+                                            f"Section {si+1} ({orig_sections[si]['date']}) ran out of time during theme '{theme}'.")
+                                    time_cursor = current_time[si]
+                                    for idx in group.index:
+                                        df_work.at[idx, 'Session ID'] = session_id
+                                        df_work.at[idx, 'Date'] = orig_sections[si]['date'].strftime("%Y-%m-%d")
+                                        df_work.at[idx, 'Time Slot'] = time_cursor.strftime("%I:%M %p")
+                                        df_work.at[idx, 'Section'] = orig_sections[si]['name']
+                                        time_cursor += timedelta(minutes=int(orig_slot))
+                                    current_time[si] = time_cursor
+                                    session_id += 1
 
-                    poster_sections.append({
-                        'name':       f"Poster Section {i+1}",
-                        'sheet_name': make_sheet_name(section_date, start, end),
-                        'date':       section_date,
-                        'start':      start,
-                        'end':        end,
-                        'start_dt':   start_dt,
-                        'end_dt':     end_dt,
-                    })
+                        for w in overflow_warnings:
+                            st.warning(w)
 
-                if st.button("Generate Poster Schedule"):
-                    df_work = df.copy().sort_values(by="Theme").reset_index(drop=True)
+                        cols = ['Section', 'Date', 'Session ID', 'Time Slot', 'Theme', 'Title', 'Presenter(s)', 'Faculty Mentor', 'Overflow']
+                        final_df = df_work[cols]
 
-                    df_work, excluded_df, gen_warnings, session_id = assign_with_constraints(
-                        df_work, poster_sections, has_constraints, mode="poster",
-                    )
+                        overflow_count = (final_df['Overflow'] == 'OVERFLOW').sum()
+                        st.write("**Oral Schedule Preview (first 20 rows):**")
+                        st.dataframe(final_df.head(20))
+                        if len(final_df) > 20:
+                            st.caption(f"Showing 20 of {len(final_df)} rows.")
+                        st.write(f"Total scheduled: {final_df['Session ID'].notna().sum()} presentations | Sessions: {session_id-1}")
+                        if overflow_count > 0:
+                            st.warning(f"{overflow_count} presentation(s) tagged as OVERFLOW (scheduled past section end time).")
 
-                    for w in gen_warnings:
-                        st.warning(w)
+                        sections_data = []
+                        for si, s in enumerate(orig_sections):
+                            mask = final_df['Section'] == s['name']
+                            sections_data.append({"sheet_name": s['sheet_name'], "section_df": final_df[mask].reset_index(drop=True)})
 
-                    cols = ['Theme', 'Title', 'Presenter(s)', 'Faculty Mentor']
-                    if has_constraints:
-                        cols.append('Availability Constraint')
-                    cols += ['Section', 'Date', 'Session ID', 'Time Slot']
+                        xlsx_buf = build_xlsx(sections_data, final_df, cols, "oral_schedule.xlsx")
+                        st.download_button("Download Oral Schedule XLSX", xlsx_buf,
+                                           "oral_presentation_schedule.xlsx",
+                                           "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                           key="orig_dl_oral")
 
-                    final_df = df_work[df_work['Section'].notna()][cols]
+                elif orig_session_type == "Poster Session Maker":
+                    orig_poster_num = st.number_input("Number of poster sections (across all days):", min_value=1, max_value=10, value=2, key="orig_poster_num")
+                    orig_poster_dur = st.number_input("Duration per poster (minutes):", min_value=5, max_value=60, value=10, key="orig_poster_dur")
 
-                    st.write("**Poster Schedule Preview (first 20 rows):**")
-                    st.dataframe(final_df.head(20))
-                    if len(final_df) > 20:
-                        st.caption(f"Showing 20 of {len(final_df)} rows.")
-                    st.write(f"Total scheduled: {final_df['Session ID'].notna().sum()} posters | Slots: {session_id-1}")
-                    if not excluded_df.empty:
-                        st.info(f"{len(excluded_df)} presenter(s) excluded due to availability constraints (see Excluded sheet in download).")
+                    orig_poster_sections = []
+                    for i in range(int(orig_poster_num)):
+                        st.subheader(f"Poster Section {i+1}")
+                        c_date, c_start, c_end = st.columns(3)
+                        with c_date:
+                            section_date = st.date_input("Date:", key=f"orig_poster_date_{i}", value=datetime.today().date())
+                        with c_start:
+                            start = st.time_input("Start Time:", key=f"orig_poster_start_{i}",
+                                                  value=datetime.strptime("10:00 AM", "%I:%M %p").time() if i == 0
+                                                  else datetime.strptime("1:00 PM", "%I:%M %p").time())
+                        with c_end:
+                            end = st.time_input("End Time:", key=f"orig_poster_end_{i}",
+                                                value=datetime.strptime("11:30 AM", "%I:%M %p").time() if i == 0
+                                                else datetime.strptime("2:30 PM", "%I:%M %p").time())
 
-                    sections_data = []
-                    for si, s in enumerate(poster_sections):
-                        mask = final_df['Section'] == s['name']
-                        sections_data.append({
-                            "sheet_name": s['sheet_name'],
-                            "section_df": final_df[mask].reset_index(drop=True),
+                        start_dt = datetime.combine(section_date, start)
+                        end_dt = datetime.combine(section_date, end)
+                        if end_dt <= start_dt:
+                            end_dt += timedelta(days=1)
+
+                        orig_poster_sections.append({
+                            'name': f"Poster Section {i+1}", 'sheet_name': make_sheet_name(section_date, start, end),
+                            'date': section_date, 'start': start, 'end': end,
+                            'start_dt': start_dt, 'end_dt': end_dt,
                         })
 
-                    xlsx_buf = build_xlsx(sections_data, final_df, cols, "poster_schedule.xlsx",
-                                          excluded_df=excluded_df if not excluded_df.empty else None)
-                    st.download_button(
-                        "Download Poster Schedule XLSX",
-                        xlsx_buf,
-                        "poster_presentation_schedule.xlsx",
-                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    )
+                    if st.button("Generate Poster Schedule", key="orig_gen_poster"):
+                        df_work = orig_df.copy().sort_values(by="Theme").reset_index(drop=True)
+                        split_indices = np.linspace(0, len(df_work), int(orig_poster_num)+1, dtype=int)
+                        poster_groups = [df_work.iloc[split_indices[i]:split_indices[i+1]] for i in range(int(orig_poster_num))]
+
+                        df_work['Session ID'] = None
+                        df_work['Date'] = None
+                        df_work['Time Slot'] = None
+                        df_work['Section'] = None
+
+                        global_session_id = 1
+                        overflow_warnings = []
+
+                        for idx, group in enumerate(poster_groups):
+                            time_cursor = orig_poster_sections[idx]['start_dt']
+                            end_time = orig_poster_sections[idx]['end_dt']
+                            for i in range(len(group)):
+                                if time_cursor >= end_time:
+                                    overflow_warnings.append(
+                                        f"Poster Section {idx+1} ({orig_poster_sections[idx]['date']}) ran out of time at poster #{i+1}.")
+                                df_work.at[group.index[i], 'Session ID'] = global_session_id
+                                df_work.at[group.index[i], 'Date'] = orig_poster_sections[idx]['date'].strftime("%Y-%m-%d")
+                                df_work.at[group.index[i], 'Time Slot'] = time_cursor.strftime("%I:%M %p")
+                                df_work.at[group.index[i], 'Section'] = orig_poster_sections[idx]['name']
+                                time_cursor += timedelta(minutes=int(orig_poster_dur))
+                                global_session_id += 1
+
+                        for w in overflow_warnings:
+                            st.warning(w)
+
+                        cols = ['Section', 'Date', 'Session ID', 'Time Slot', 'Theme', 'Title', 'Presenter(s)', 'Faculty Mentor']
+                        final_df = df_work[cols]
+
+                        st.write("**Poster Schedule Preview (first 20 rows):**")
+                        st.dataframe(final_df.head(20))
+                        if len(final_df) > 20:
+                            st.caption(f"Showing 20 of {len(final_df)} rows.")
+                        st.write(f"Total scheduled: {final_df['Session ID'].notna().sum()} posters | Slots: {global_session_id-1}")
+
+                        sections_data = []
+                        for si, s in enumerate(orig_poster_sections):
+                            mask = final_df['Section'] == s['name']
+                            sections_data.append({"sheet_name": s['sheet_name'], "section_df": final_df[mask].reset_index(drop=True)})
+
+                        xlsx_buf = build_xlsx(sections_data, final_df, cols, "poster_schedule.xlsx")
+                        st.download_button("Download Poster Schedule XLSX", xlsx_buf,
+                                           "poster_presentation_schedule.xlsx",
+                                           "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                           key="orig_dl_poster")
+
+# ==================================================================
+# CSUSB MOTM EDITION TAB
+# ==================================================================
+with tab_motm:
+    motm_col1, motm_col2 = st.columns([1, 2])
+    motm_col1.markdown('<div class="column-spacing"></div>', unsafe_allow_html=True)
+    motm_col2.markdown('<div class="column-spacing"></div>', unsafe_allow_html=True)
+
+    with motm_col1:
+        st.markdown("""
+        **CSUSB Meeting of the Minds Edition**
+
+        This version adds availability-constraint-aware scheduling.
+
+        #### Required Columns:
+        - **Theme**
+        - **Title**
+        - **Presenter(s)**
+        - **Faculty Mentor**
+
+        #### Optional Column:
+        - **Availability Constraint** -- supported formats:
+          - *Empty / blank*: No constraint (schedule anywhere)
+          - *Specific time window*: `April 15, 2:30 - 4:00 PM`
+          - *Multiple windows*: comma-separated list of windows
+          - *Day only*: `April 15 only`
+          - *Either day*: No constraint
+          - *None / Neither day*: Presenter excluded from schedule
+          - *Late submission*: Treated as no constraint
+
+        #### Poster Mode:
+        Posters are assigned to a **day/section** only (no individual time slots),
+        since all posters display simultaneously.
+
+        #### Output:
+        XLSX with **Master** + per-section tabs + **Excluded** sheet (if any).
+        """)
+
+    with motm_col2:
+        motm_file = st.file_uploader("Upload Excel File", type=["xlsx"], key="motm_upload")
+
+        if motm_file:
+            motm_sheets = pd.read_excel(motm_file, sheet_name=None)
+            if "Master" in motm_sheets:
+                df = motm_sheets["Master"]
+            else:
+                df = list(motm_sheets.values())[0]
+
+            required_columns = ['Theme', 'Title', 'Presenter(s)', 'Faculty Mentor']
+            missing_cols = [c for c in required_columns if c not in df.columns]
+
+            if missing_cols:
+                st.error(f"Missing columns: {missing_cols}")
+            elif df.empty:
+                st.warning("The Master sheet is empty. Add your presentations to the Master sheet and re-upload.")
+            else:
+                has_constraints = "Availability Constraint" in df.columns
+
+                if has_constraints:
+                    _year = datetime.today().year
+                    _parsed = df["Availability Constraint"].apply(lambda v: parse_constraint(v, _year))
+                    _n_any = sum(1 for p in _parsed if p["type"] == "any")
+                    _n_excl = sum(1 for p in _parsed if p["type"] == "excluded")
+                    _n_unrec = sum(1 for p in _parsed if p["type"] == "unrecognized")
+                    _n_constrained = len(df) - _n_any - _n_excl - _n_unrec
+                    with st.expander("Availability Constraint Summary", expanded=False):
+                        st.write(f"Total presentations: **{len(df)}**")
+                        st.write(f"Unconstrained: **{_n_any}**")
+                        st.write(f"Constrained to specific sections: **{_n_constrained}**")
+                        st.write(f"Excluded (cannot attend): **{_n_excl}**")
+                        if _n_unrec > 0:
+                            st.warning(f"{_n_unrec} presentation(s) have unrecognized constraint formats (will be treated as unconstrained).")
+                        if _n_excl > 0:
+                            _excl_df = df[_parsed.apply(lambda p: p["type"] == "excluded")]
+                            st.info("Excluded presenters:")
+                            st.dataframe(_excl_df[["Title", "Presenter(s)", "Availability Constraint"]])
+
+                session_type = st.radio("Choose Session Type:", ["Oral Session Maker", "Poster Session Maker"], key="motm_session_type")
+
+                if session_type == "Oral Session Maker":
+                    slot_duration = st.number_input("Duration per presentation (minutes):", min_value=5, max_value=20, value=15, key="motm_slot")
+                    max_presentations = st.number_input("Max presentations per session:", min_value=3, max_value=10, value=4, key="motm_max")
+                    num_sections = st.number_input("Number of sections (across all days):", min_value=1, max_value=10, value=2, key="motm_num")
+
+                    sections = []
+                    for i in range(int(num_sections)):
+                        st.subheader(f"Section {i+1}")
+                        c_date, c_start, c_end = st.columns(3)
+                        with c_date:
+                            section_date = st.date_input("Date:", key=f"motm_date_{i}", value=datetime.today().date())
+                        with c_start:
+                            start = st.time_input("Start time:", key=f"motm_start_{i}",
+                                                  value=datetime.strptime("10:00 AM", "%I:%M %p").time() if i == 0
+                                                  else datetime.strptime("2:00 PM", "%I:%M %p").time())
+                        with c_end:
+                            end = st.time_input("End time:", key=f"motm_end_{i}",
+                                                value=datetime.strptime("11:00 AM", "%I:%M %p").time() if i == 0
+                                                else datetime.strptime("3:00 PM", "%I:%M %p").time())
+
+                        start_dt = datetime.combine(section_date, start)
+                        end_dt = datetime.combine(section_date, end)
+                        if end_dt <= start_dt:
+                            end_dt += timedelta(days=1)
+
+                        sections.append({
+                            'name': f"Section {i+1}", 'sheet_name': make_sheet_name(section_date, start, end),
+                            'date': section_date, 'start': start, 'end': end,
+                            'start_dt': start_dt, 'end_dt': end_dt,
+                        })
+
+                    if st.button("Generate Schedule", key="motm_gen_oral"):
+                        df_work = df.copy().sort_values(by="Theme").reset_index(drop=True)
+
+                        df_work, excluded_df, gen_warnings, session_id = assign_with_constraints(
+                            df_work, sections, has_constraints, mode="oral",
+                            slot_duration=slot_duration, max_presentations=max_presentations,
+                        )
+
+                        for w in gen_warnings:
+                            st.warning(w)
+
+                        cols = ['Theme', 'Title', 'Presenter(s)', 'Faculty Mentor']
+                        if has_constraints:
+                            cols.append('Availability Constraint')
+                        cols += ['Section', 'Date', 'Session ID', 'Time Slot', 'Overflow']
+
+                        final_df = df_work[df_work['Section'].notna()][cols]
+
+                        overflow_count = (final_df['Overflow'] == 'OVERFLOW').sum()
+                        st.write("**Oral Schedule Preview (first 20 rows):**")
+                        st.dataframe(final_df.head(20))
+                        if len(final_df) > 20:
+                            st.caption(f"Showing 20 of {len(final_df)} rows.")
+                        st.write(f"Total scheduled: {final_df['Session ID'].notna().sum()} presentations | Sessions: {session_id-1}")
+                        if overflow_count > 0:
+                            st.warning(f"{overflow_count} presentation(s) tagged as OVERFLOW (scheduled past section end time).")
+                        if not excluded_df.empty:
+                            st.info(f"{len(excluded_df)} presenter(s) excluded due to availability constraints (see Excluded sheet in download).")
+
+                        sections_data = []
+                        for si, s in enumerate(sections):
+                            mask = final_df['Section'] == s['name']
+                            sections_data.append({"sheet_name": s['sheet_name'], "section_df": final_df[mask].reset_index(drop=True)})
+
+                        xlsx_buf = build_xlsx(sections_data, final_df, cols, "oral_schedule.xlsx",
+                                              excluded_df=excluded_df if not excluded_df.empty else None)
+                        st.download_button("Download Oral Schedule XLSX", xlsx_buf,
+                                           "oral_presentation_schedule.xlsx",
+                                           "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                           key="motm_dl_oral")
+
+                elif session_type == "Poster Session Maker":
+                    num_sections = st.number_input("Number of poster sections (across all days):", min_value=1, max_value=10, value=2, key="motm_poster_num")
+
+                    poster_sections = []
+                    for i in range(int(num_sections)):
+                        st.subheader(f"Poster Section {i+1}")
+                        c_date, c_start, c_end = st.columns(3)
+                        with c_date:
+                            section_date = st.date_input("Date:", key=f"motm_poster_date_{i}", value=datetime.today().date())
+                        with c_start:
+                            start = st.time_input("Start Time:", key=f"motm_poster_start_{i}",
+                                                  value=datetime.strptime("10:00 AM", "%I:%M %p").time() if i == 0
+                                                  else datetime.strptime("1:00 PM", "%I:%M %p").time())
+                        with c_end:
+                            end = st.time_input("End Time:", key=f"motm_poster_end_{i}",
+                                                value=datetime.strptime("11:30 AM", "%I:%M %p").time() if i == 0
+                                                else datetime.strptime("2:30 PM", "%I:%M %p").time())
+
+                        start_dt = datetime.combine(section_date, start)
+                        end_dt = datetime.combine(section_date, end)
+                        if end_dt <= start_dt:
+                            end_dt += timedelta(days=1)
+
+                        poster_sections.append({
+                            'name': f"Poster Section {i+1}", 'sheet_name': make_sheet_name(section_date, start, end),
+                            'date': section_date, 'start': start, 'end': end,
+                            'start_dt': start_dt, 'end_dt': end_dt,
+                        })
+
+                    if st.button("Generate Poster Schedule", key="motm_gen_poster"):
+                        df_work = df.copy().sort_values(by="Theme").reset_index(drop=True)
+
+                        df_work, excluded_df, gen_warnings, session_id = assign_with_constraints(
+                            df_work, poster_sections, has_constraints, mode="poster",
+                        )
+
+                        for w in gen_warnings:
+                            st.warning(w)
+
+                        cols = ['Theme', 'Title', 'Presenter(s)', 'Faculty Mentor']
+                        if has_constraints:
+                            cols.append('Availability Constraint')
+                        cols += ['Section', 'Date', 'Session ID', 'Time Slot']
+
+                        final_df = df_work[df_work['Section'].notna()][cols]
+
+                        st.write("**Poster Schedule Preview (first 20 rows):**")
+                        st.dataframe(final_df.head(20))
+                        if len(final_df) > 20:
+                            st.caption(f"Showing 20 of {len(final_df)} rows.")
+                        st.write(f"Total scheduled: {final_df['Session ID'].notna().sum()} posters | Slots: {session_id-1}")
+                        if not excluded_df.empty:
+                            st.info(f"{len(excluded_df)} presenter(s) excluded due to availability constraints (see Excluded sheet in download).")
+
+                        sections_data = []
+                        for si, s in enumerate(poster_sections):
+                            mask = final_df['Section'] == s['name']
+                            sections_data.append({"sheet_name": s['sheet_name'], "section_df": final_df[mask].reset_index(drop=True)})
+
+                        xlsx_buf = build_xlsx(sections_data, final_df, cols, "poster_schedule.xlsx",
+                                              excluded_df=excluded_df if not excluded_df.empty else None)
+                        st.download_button("Download Poster Schedule XLSX", xlsx_buf,
+                                           "poster_presentation_schedule.xlsx",
+                                           "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                           key="motm_dl_poster")
