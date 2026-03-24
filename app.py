@@ -241,7 +241,7 @@ def assign_with_constraints(df_work, sections, has_constraints, mode,
             for theme, theme_df in section_pres.groupby("Theme", sort=False):
                 for i in range(0, len(theme_df), int(max_presentations)):
                     group = theme_df.iloc[i:i + int(max_presentations)]
-                    required_end = time_cursor + timedelta(minutes=len(group) * int(slot_duration))
+                    required_end = time_cursor + timedelta(minutes=int(slot_duration))
                     if required_end > section_end:
                         warnings.append(f"{sec['name']} ({sec['date']}) ran out of time during theme '{theme}'.")
                     for idx in group.index:
@@ -249,7 +249,7 @@ def assign_with_constraints(df_work, sections, has_constraints, mode,
                         df_work.at[idx, "Date"] = sec["date"].strftime("%Y-%m-%d")
                         df_work.at[idx, "Time Slot"] = time_cursor.strftime("%I:%M %p")
                         df_work.at[idx, "Section"] = sec["name"]
-                        time_cursor += timedelta(minutes=int(slot_duration))
+                    time_cursor += timedelta(minutes=int(slot_duration))
                     session_id += 1
         else:  # poster — all posters display simultaneously, just assign day
             time_label = f"{sec['start_dt'].strftime('%I:%M %p')} - {sec['end_dt'].strftime('%I:%M %p')}"
@@ -295,7 +295,7 @@ def _assign_no_constraints(df_work, sections, mode, slot_duration, max_presentat
             for theme, theme_df in section_df.groupby("Theme"):
                 for i in range(0, len(theme_df), int(max_presentations)):
                     group = theme_df.iloc[i:i + int(max_presentations)]
-                    required_end = current_time[si] + timedelta(minutes=len(group) * int(slot_duration))
+                    required_end = current_time[si] + timedelta(minutes=int(slot_duration))
                     if required_end > section_end:
                         overflow_warnings.append(f"{sections[si]['name']} ({sections[si]['date']}) ran out of time during theme '{theme}'.")
                     for idx in group.index:
@@ -303,7 +303,7 @@ def _assign_no_constraints(df_work, sections, mode, slot_duration, max_presentat
                         df_work.at[idx, "Date"] = sections[si]["date"].strftime("%Y-%m-%d")
                         df_work.at[idx, "Time Slot"] = current_time[si].strftime("%I:%M %p")
                         df_work.at[idx, "Section"] = sections[si]["name"]
-                        current_time[si] += timedelta(minutes=int(slot_duration))
+                    current_time[si] += timedelta(minutes=int(slot_duration))
                     session_id += 1
     else:  # poster — all posters display simultaneously, just assign day
         global_session_id = 1
