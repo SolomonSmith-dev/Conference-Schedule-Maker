@@ -500,17 +500,14 @@ with tab_original:
                         for w in overflow_warnings:
                             st.warning(w)
 
-                        cols = ['Section', 'Date', 'Session ID', 'Time Slot', 'Theme', 'Title', 'Presenter(s)', 'Faculty Mentor', 'Overflow']
+                        cols = ['Section', 'Date', 'Session ID', 'Time Slot', 'Theme', 'Title', 'Presenter(s)', 'Faculty Mentor']
                         final_df = df_work[cols]
 
-                        overflow_count = (final_df['Overflow'] == 'OVERFLOW').sum()
                         st.write("**Oral Schedule Preview (first 20 rows):**")
                         st.dataframe(final_df.head(20))
                         if len(final_df) > 20:
                             st.caption(f"Showing 20 of {len(final_df)} rows.")
                         st.write(f"Total scheduled: {final_df['Session ID'].notna().sum()} presentations | Sessions: {session_id-1}")
-                        if overflow_count > 0:
-                            st.warning(f"{overflow_count} presentation(s) tagged as OVERFLOW (scheduled past section end time).")
 
                         sections_data = []
                         for si, s in enumerate(orig_sections):
