@@ -382,10 +382,11 @@ def build_xlsx(sections_data, final_df, columns, output_filename, excluded_df=No
 tab_original, tab_motm = st.tabs(["Original", "CSUSB MOTM Edition"])
 
 # ==================================================================
-# ORIGINAL TAB
+# ORIGINAL TAB -- exact replica of the original author's code
 # ==================================================================
 with tab_original:
     orig_col1, orig_col2 = st.columns([1, 2])
+
     orig_col1.markdown('<div class="column-spacing"></div>', unsafe_allow_html=True)
     orig_col2.markdown('<div class="column-spacing"></div>', unsafe_allow_html=True)
 
@@ -395,7 +396,7 @@ with tab_original:
         Please follow the instructions below to ensure smooth processing of your schedule:
 
         #### Required Columns in the Excel File:
-        Your Excel file must include **exactly** the following columns (case-sensitive):
+        Your Excel file must include **exactly** the following columns, spelled as shown (case-sensitive) and located in the first row:
         - **Theme**
         - **Title**
         - **Presenter(s)**
@@ -404,200 +405,177 @@ with tab_original:
         #### Column Descriptions:
         - **Theme**: Category or department (e.g., Arts, Biology, Computer Science)
         - **Title**: Title of the presentation
-        - **Presenter(s)**: Name(s), comma-separated for multiple
-        - **Faculty Mentor**: Name(s) of the faculty mentor(s)
+        - **Presenter(s)**: The name(s) of the presenter(s), separated by commas if there are multiple presenters
+        - **Faculty Mentor**: The name(s) of the faculty mentor(s)
 
-        #### Multi-Day / Multi-Sheet Output:
-        Each section is assigned a **date + time window**. The downloaded XLSX will contain
-        a **Master sheet** plus one tab per section, named `MMDD HHMM-HHMM`
-        (e.g. `415 1430-1600` = April 15, 2:30-4:00 PM).
         """)
 
     with orig_col2:
-        orig_file = st.file_uploader("Upload Excel File", type=["xlsx"], key="orig_upload")
+        orig_uploaded_file = st.file_uploader("Upload Excel File", type=["xlsx"], key="orig_upload")
 
-        if orig_file:
-            orig_sheets = pd.read_excel(orig_file, sheet_name=None)
-            if "Master" in orig_sheets:
-                orig_df = orig_sheets["Master"]
-            else:
-                orig_df = list(orig_sheets.values())[0]
+        if orig_uploaded_file:
+            orig_df = pd.read_excel(orig_uploaded_file)
 
             orig_required = ['Theme', 'Title', 'Presenter(s)', 'Faculty Mentor']
-            orig_missing = [c for c in orig_required if c not in orig_df.columns]
+            orig_missing = [col for col in orig_required if col not in orig_df.columns]
 
             if orig_missing:
-                st.error(f"Missing columns: {orig_missing}")
-            elif orig_df.empty:
-                st.warning("The Master sheet is empty. Add your presentations to the Master sheet and re-upload.")
+                st.error(f"Missing columns in uploaded file: {orig_missing}")
             else:
                 orig_session_type = st.radio("Choose Session Type:", ["Oral Session Maker", "Poster Session Maker"], key="orig_session_type")
 
+                # Oral Session Maker
                 if orig_session_type == "Oral Session Maker":
-                    orig_slot = st.number_input("Duration per presentation (minutes):", min_value=5, max_value=20, value=15, key="orig_slot")
-                    orig_max = st.number_input("Max presentations per session:", min_value=3, max_value=10, value=4, key="orig_max")
-                    orig_num = st.number_input("Number of sections (across all days):", min_value=1, max_value=10, value=2, key="orig_num")
+                    orig_slot = st.number_input("Duration per presentation (minutes):",
+                                                min_value=5, max_value=20, value=15, key="orig_slot")
+                    orig_max = st.number_input("Max presentations per session:",
+                                               min_value=3, max_value=10, value=4, key="orig_max")
+                    orig_num = st.number_input("Number of sections(or no. of oral sessions throughout the day):",
+                                               min_value=1, max_value=3, value=2, key="orig_num")
 
                     orig_sections = []
-                    for i in range(int(orig_num)):
-                        st.subheader(f"Section {i+1}")
-                        c_date, c_start, c_end = st.columns(3)
-                        with c_date:
-                            section_date = st.date_input("Date:", key=f"orig_date_{i}", value=datetime.today().date())
-                        with c_start:
-                            start = st.time_input("Start time:", key=f"orig_start_{i}",
+                    for i in range(orig_num):
+                        st.subheader(f"Section {i+1} Time Range")
+                        oc1, oc2 = st.columns(2)
+                        with oc1:
+                            start = st.time_input(f"Start time:", key=f"orig_start_{i}",
                                                   value=datetime.strptime("10:00 AM", "%I:%M %p").time() if i == 0
                                                   else datetime.strptime("2:00 PM", "%I:%M %p").time())
-                        with c_end:
-                            end = st.time_input("End time:", key=f"orig_end_{i}",
+                        with oc2:
+                            end = st.time_input(f"End time:", key=f"orig_end_{i}",
                                                 value=datetime.strptime("11:00 AM", "%I:%M %p").time() if i == 0
                                                 else datetime.strptime("3:00 PM", "%I:%M %p").time())
 
-                        start_dt = datetime.combine(section_date, start)
-                        end_dt = datetime.combine(section_date, end)
-                        if end_dt <= start_dt:
-                            end_dt += timedelta(days=1)
-
                         orig_sections.append({
-                            'name': f"Section {i+1}", 'sheet_name': make_sheet_name(section_date, start, end),
-                            'date': section_date, 'start': start, 'end': end,
-                            'start_dt': start_dt, 'end_dt': end_dt,
+                            'name': f"Section {i+1}",
+                            'start': start,
+                            'end': end,
+                            'start_dt': datetime.combine(datetime.today(), start),
+                            'end_dt': datetime.combine(
+                                datetime.today() + timedelta(days=1) if end < start else datetime.today(),
+                                end
+                            )
                         })
 
                     if st.button("Generate Schedule", key="orig_gen_oral"):
-                        df_work = orig_df.copy().sort_values(by="Theme").reset_index(drop=True)
-                        split_indices = np.linspace(0, len(df_work), int(orig_num)+1, dtype=int)
-                        section_dfs = [df_work.iloc[split_indices[i]:split_indices[i+1]] for i in range(int(orig_num))]
+                        orig_df = orig_df.sort_values(by="Theme")
+                        total_presentations = len(orig_df)
+                        split_indices = np.linspace(0, total_presentations, orig_num+1, dtype=int)
+                        section_dfs = [orig_df.iloc[split_indices[i]:split_indices[i+1]] for i in range(orig_num)]
 
-                        df_work['Session ID'] = None
-                        df_work['Date'] = None
-                        df_work['Time Slot'] = None
-                        df_work['Section'] = None
+                        orig_df['Session ID'] = None
+                        orig_df['Time Slot'] = None
+                        orig_df['Section'] = None
 
                         session_id = 1
-                        current_time = [s['start_dt'] for s in orig_sections]
-                        overflow_warnings = []
+                        current_time = [section['start_dt'] for section in orig_sections]
+                        section_day = [0] * orig_num
 
-                        for si, section_df in enumerate(section_dfs):
-                            section_end = orig_sections[si]['end_dt']
-                            for theme, theme_df in section_df.groupby('Theme'):
-                                for i in range(0, len(theme_df), int(orig_max)):
-                                    group = theme_df.iloc[i:i+int(orig_max)]
-                                    required_end = current_time[si] + timedelta(minutes=len(group)*int(orig_slot))
-                                    if required_end > section_end:
-                                        overflow_warnings.append(
-                                            f"Section {si+1} ({orig_sections[si]['date']}) ran out of time during theme '{theme}'.")
-                                    time_cursor = current_time[si]
-                                    for idx in group.index:
-                                        df_work.at[idx, 'Session ID'] = session_id
-                                        df_work.at[idx, 'Date'] = orig_sections[si]['date'].strftime("%Y-%m-%d")
-                                        df_work.at[idx, 'Time Slot'] = time_cursor.strftime("%I:%M %p")
-                                        df_work.at[idx, 'Section'] = orig_sections[si]['name']
-                                        time_cursor += timedelta(minutes=int(orig_slot))
-                                    current_time[si] = time_cursor
+                        for section_idx, section_df in enumerate(section_dfs):
+                            theme_groups = section_df.groupby('Theme')
+
+                            for theme, theme_df in theme_groups:
+                                for i in range(0, len(theme_df), orig_max):
+                                    presentation_group = theme_df.iloc[i:i+orig_max]
+                                    required_time = current_time[section_idx] + timedelta(minutes=len(presentation_group)*orig_slot)
+                                    section_end = datetime.combine(
+                                        datetime.today() + timedelta(days=section_day[section_idx]),
+                                        orig_sections[section_idx]['end']
+                                    )
+
+                                    if required_time > section_end:
+                                        section_day[section_idx] += 1
+                                        current_time[section_idx] = datetime.combine(
+                                            datetime.today() + timedelta(days=section_day[section_idx]),
+                                            orig_sections[section_idx]['start']
+                                        )
+                                        required_time = current_time[section_idx] + timedelta(minutes=len(presentation_group)*orig_slot)
+
+                                    time_cursor = current_time[section_idx]
+                                    for idx in presentation_group.index:
+                                        orig_df.at[idx, 'Session ID'] = session_id
+                                        orig_df.at[idx, 'Time Slot'] = time_cursor.strftime("%I:%M %p")
+                                        orig_df.at[idx, 'Section'] = orig_sections[section_idx]['name']
+                                        time_cursor += timedelta(minutes=orig_slot)
+
+                                    current_time[section_idx] = time_cursor
                                     session_id += 1
 
-                        for w in overflow_warnings:
-                            st.warning(w)
-
-                        cols = ['Section', 'Date', 'Session ID', 'Time Slot', 'Theme', 'Title', 'Presenter(s)', 'Faculty Mentor']
-                        final_df = df_work[cols]
-
-                        st.write("**Oral Schedule Preview (first 20 rows):**")
+                        final_df = orig_df[['Section', 'Session ID', 'Time Slot', 'Theme', 'Title', 'Presenter(s)', 'Faculty Mentor']]
+                        st.write("**Oral Schedule Preview:**")
                         st.dataframe(final_df.head(20))
-                        if len(final_df) > 20:
-                            st.caption(f"Showing 20 of {len(final_df)} rows.")
-                        st.write(f"Total scheduled: {final_df['Session ID'].notna().sum()} presentations | Sessions: {session_id-1}")
+                        scheduled = final_df[final_df['Session ID'].notna()]
+                        st.write(f"Total scheduled: {len(scheduled)} presentations")
+                        st.write(f"Total sessions created: {session_id-1}")
 
-                        sections_data = []
-                        for si, s in enumerate(orig_sections):
-                            mask = final_df['Section'] == s['name']
-                            sections_data.append({"sheet_name": s['sheet_name'], "section_df": final_df[mask].reset_index(drop=True)})
-
-                        xlsx_buf = build_xlsx(sections_data, final_df, cols, "oral_schedule.xlsx")
-                        st.download_button("Download Oral Schedule XLSX", xlsx_buf,
-                                           "oral_presentation_schedule.xlsx",
-                                           "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        csv = final_df.to_csv(index=False).encode('utf-8')
+                        st.download_button("Download Oral Schedule CSV", csv,
+                                           "oral_presentation_schedule.csv", "text/csv",
                                            key="orig_dl_oral")
 
+                # Poster Session Maker
                 elif orig_session_type == "Poster Session Maker":
-                    orig_poster_num = st.number_input("Number of poster sections (across all days):", min_value=1, max_value=10, value=2, key="orig_poster_num")
-                    orig_poster_dur = st.number_input("Duration per poster (minutes):", min_value=5, max_value=60, value=10, key="orig_poster_dur")
+                    orig_poster_num = st.number_input("Number of poster sections(or no. of poster sessions throughout the day) :",
+                                                      min_value=1, max_value=5, value=2, key="orig_poster_num")
 
                     orig_poster_sections = []
-                    for i in range(int(orig_poster_num)):
-                        st.subheader(f"Poster Section {i+1}")
-                        c_date, c_start, c_end = st.columns(3)
-                        with c_date:
-                            section_date = st.date_input("Date:", key=f"orig_poster_date_{i}", value=datetime.today().date())
-                        with c_start:
-                            start = st.time_input("Start Time:", key=f"orig_poster_start_{i}",
+                    for i in range(orig_poster_num):
+                        st.subheader(f"Poster Section {i+1} Time Range")
+                        oc1, oc2 = st.columns(2)
+                        with oc1:
+                            start = st.time_input(f"Start Time:", key=f"orig_poster_start_{i}",
                                                   value=datetime.strptime("10:00 AM", "%I:%M %p").time() if i == 0
                                                   else datetime.strptime("1:00 PM", "%I:%M %p").time())
-                        with c_end:
-                            end = st.time_input("End Time:", key=f"orig_poster_end_{i}",
+                        with oc2:
+                            end = st.time_input(f"End Time:", key=f"orig_poster_end_{i}",
                                                 value=datetime.strptime("11:30 AM", "%I:%M %p").time() if i == 0
                                                 else datetime.strptime("2:30 PM", "%I:%M %p").time())
-
-                        start_dt = datetime.combine(section_date, start)
-                        end_dt = datetime.combine(section_date, end)
-                        if end_dt <= start_dt:
-                            end_dt += timedelta(days=1)
-
                         orig_poster_sections.append({
-                            'name': f"Poster Section {i+1}", 'sheet_name': make_sheet_name(section_date, start, end),
-                            'date': section_date, 'start': start, 'end': end,
-                            'start_dt': start_dt, 'end_dt': end_dt,
+                            'name': f"Poster Section {i+1}",
+                            'start': start,
+                            'end': end,
+                            'start_dt': datetime.combine(datetime.today(), start),
+                            'end_dt': datetime.combine(
+                                datetime.today() + timedelta(days=1) if end < start else datetime.today(),
+                                end
+                            )
                         })
 
                     if st.button("Generate Poster Schedule", key="orig_gen_poster"):
-                        df_work = orig_df.copy().sort_values(by="Theme").reset_index(drop=True)
-                        split_indices = np.linspace(0, len(df_work), int(orig_poster_num)+1, dtype=int)
-                        poster_groups = [df_work.iloc[split_indices[i]:split_indices[i+1]] for i in range(int(orig_poster_num))]
+                        orig_df = orig_df.sort_values(by="Theme")
+                        total_presentations = len(orig_df)
+                        split_indices = np.linspace(0, total_presentations, orig_poster_num+1, dtype=int)
+                        poster_groups = [orig_df.iloc[split_indices[i]:split_indices[i+1]] for i in range(orig_poster_num)]
 
-                        df_work['Session ID'] = None
-                        df_work['Date'] = None
-                        df_work['Time Slot'] = None
-                        df_work['Section'] = None
-
-                        global_session_id = 1
-                        overflow_warnings = []
+                        orig_df['Session ID'] = None
+                        orig_df['Time Slot'] = None
+                        orig_df['Section'] = None
 
                         for idx, group in enumerate(poster_groups):
-                            time_cursor = orig_poster_sections[idx]['start_dt']
+                            start_time = orig_poster_sections[idx]['start_dt']
                             end_time = orig_poster_sections[idx]['end_dt']
+                            time_cursor = start_time
+                            session_id = 1
                             for i in range(len(group)):
                                 if time_cursor >= end_time:
-                                    overflow_warnings.append(
-                                        f"Poster Section {idx+1} ({orig_poster_sections[idx]['date']}) ran out of time at poster #{i+1}.")
-                                df_work.at[group.index[i], 'Session ID'] = global_session_id
-                                df_work.at[group.index[i], 'Date'] = orig_poster_sections[idx]['date'].strftime("%Y-%m-%d")
-                                df_work.at[group.index[i], 'Time Slot'] = time_cursor.strftime("%I:%M %p")
-                                df_work.at[group.index[i], 'Section'] = orig_poster_sections[idx]['name']
-                                time_cursor += timedelta(minutes=int(orig_poster_dur))
-                                global_session_id += 1
+                                    time_cursor = start_time + timedelta(days=1)
 
-                        for w in overflow_warnings:
-                            st.warning(w)
+                                orig_df.at[group.index[i], 'Session ID'] = session_id
+                                orig_df.at[group.index[i], 'Time Slot'] = time_cursor.strftime("%I:%M %p")
+                                orig_df.at[group.index[i], 'Section'] = orig_poster_sections[idx]['name']
+                                time_cursor += timedelta(minutes=10)
+                                session_id += 1
 
-                        cols = ['Section', 'Date', 'Session ID', 'Time Slot', 'Theme', 'Title', 'Presenter(s)', 'Faculty Mentor']
-                        final_df = df_work[cols]
-
-                        st.write("**Poster Schedule Preview (first 20 rows):**")
+                        final_df = orig_df[['Section', 'Session ID', 'Time Slot', 'Theme', 'Title', 'Presenter(s)', 'Faculty Mentor']]
+                        st.write("**Poster Schedule Preview:**")
                         st.dataframe(final_df.head(20))
-                        if len(final_df) > 20:
-                            st.caption(f"Showing 20 of {len(final_df)} rows.")
-                        st.write(f"Total scheduled: {final_df['Session ID'].notna().sum()} posters | Slots: {global_session_id-1}")
+                        scheduled = final_df[final_df['Session ID'].notna()]
+                        st.write(f"Total scheduled: {len(scheduled)} posters")
+                        st.write(f"Total sessions created: {session_id-1}")
 
-                        sections_data = []
-                        for si, s in enumerate(orig_poster_sections):
-                            mask = final_df['Section'] == s['name']
-                            sections_data.append({"sheet_name": s['sheet_name'], "section_df": final_df[mask].reset_index(drop=True)})
-
-                        xlsx_buf = build_xlsx(sections_data, final_df, cols, "poster_schedule.xlsx")
-                        st.download_button("Download Poster Schedule XLSX", xlsx_buf,
-                                           "poster_presentation_schedule.xlsx",
-                                           "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        csv = final_df.to_csv(index=False).encode('utf-8')
+                        st.download_button("Download Poster Schedule CSV", csv,
+                                           "poster_presentation_schedule.csv", "text/csv",
                                            key="orig_dl_poster")
 
 # ==================================================================
