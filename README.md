@@ -1,67 +1,33 @@
 # Conference Schedule Maker
 
-### Deployed on Streamlit - https://conference-schedule-maker-app-git-mabxnjmbagengxvdttnhfg.streamlit.app/ 
+Streamlit app for generating academic conference schedules. Originally forked from [sakshi1802](https://github.com/sakshi1802/Conference-Schedule-Maker) and extended for CSUSB's Meeting of the Minds undergraduate research symposium.
 
-## Overview
-The **Conference Schedule Maker** is a web application developed using Streamlit and Python to assist in generating schedules for academic conferences. The tool allows organizers to upload an Excel file containing presentation details, and based on the provided data, it automatically generates and organizes session schedules for both oral and poster presentations.
+## Extensions Added
+
+- Multi-day schedule support
+- Multi-sheet XLSX output (one sheet per day)
+- Used in production for the 15th Annual CSUSB Meeting of the Minds (April 2026, 300+ presenters)
 
 ## Features
-- **Excel File Upload**: Users can upload an Excel file with columns for *Theme*, *Title*, *Presenter(s)*, and *Faculty Mentor*.
-  
-- **Session Type Selection**: Choose between *Oral Session Maker* or *Poster Session Maker*.
-  
-- **Customizable Sessions**: Define session durations, maximum presentations per session, and the number of sections (sessions) in a day.
-  
-- **Automatic Schedule Generation**: The tool sorts presentations by theme, splits them across sections, and assigns time slots based on user inputs.
-  
-- **Schedule Preview**: View a formatted preview of the generated schedule directly within the app before downloading.
-  
-- **Downloadable Schedules**: After generating the schedule, users can download it in CSV format.
 
-## Screenshots
-### Homepage
-![Homepage](screenshots/Homepage.png)
+- Upload Excel file with Theme, Title, Presenter(s), and Faculty Mentor columns
+- Choose between Oral or Poster session scheduling
+- Configure session duration, max presentations per session, and sections per day
+- Auto-sorts by theme, splits across sections, assigns time slots
+- Preview schedule in-app before downloading
+- Export as CSV or multi-sheet XLSX
 
-### Oral Sessions
-<p align="center">
-  <img src="screenshots/Oral%20Session%201.png" width="45%" />
-  <img src="screenshots/Oral%20Session%202.png" width="45%" />
-</p>
+## Stack
 
-### Poster Sessions
-![Poster Sessions](screenshots/Poster%20Sessions.png)
+Python, Streamlit, pandas, openpyxl
 
-### Results (CSV Files)
-<p align="center">
-  <img src="screenshots/Oral%20Session%20CSV.png" width="45%" />
-  <img src="screenshots/Poster%20Sessions%20CSV.png" width="45%" />
-</p>
+## Setup
 
+```bash
+git clone https://github.com/SolomonSmith-dev/Conference-Schedule-Maker
+cd Conference-Schedule-Maker
+pip install -r requirements.txt
+streamlit run app.py
+```
 
-## Requirements
-- Python 3.7 or higher
-- Required Libraries:
-  - `streamlit`
-  - `pandas`
-  - `numpy`
-  - `openpyxl`
-    
-## Sample Data
-A **sample_file_conference_schedule_maker** is provided in the repository to test the app and understand the required format. 
-Use this file to:
-- See how the schedule maker works.
-- Ensure your input file has correctly formatted column headers.
-
-**Required Column Headers (case-sensitive):**
-- Theme
-- Title
-- Presenter(s)
-- Faculty Mentor
-  
-## How to Use Locally
-1. **Clone the repository** or download the code.
-2. Install the required dependencies:
-   -`pip install -r requirements.txt`
-3. Run the Streamlit app locally:
-   -`streamlit run app.py`
-4. Open your browser and navigate to `http://localhost:8501` to view the app.
+Or use the [live demo](https://conference-schedule-maker-app-git-mabxnjmbagengxvdttnhfg.streamlit.app/).
